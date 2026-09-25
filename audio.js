@@ -17,7 +17,7 @@ class BreathAudioEngine {
     this.binauralOscs = [];
     this.binauralGain = null;
     
-    this.soundPack = 'bowl'; // 'bowl', 'ambient', 'ocean', 'binaural', 'chime', 'silent'
+    this.soundPack = 'gentle'; // 'gentle', 'bowl', 'ambient', 'ocean', 'binaural', 'chime', 'silent'
     this.volume = 0.75;
     this.voiceEnabled = false;
     this.hapticsEnabled = true;
@@ -111,20 +111,29 @@ class BreathAudioEngine {
     }
 
     // Sound pack triggers
-    if (this.soundPack === 'bowl') {
+    if (this.soundPack === 'gentle') {
+      // Gentle breath whisper — soft sine swell, no hard strike
       const pitchMap = {
-        'inhale': 216,   // A3 tuned
-        'hold-in': 288,  // D4
-        'exhale': 192,   // G3
-        'hold-out': 162  // E3
+        'inhale':   [285, 360],  // rising: warm D4 + soft F4 overtone
+        'hold-in':  [285, 285],  // sustained hum
+        'exhale':   [213, 285],  // falling: soft G3 + D4
+        'hold-out': [180, 213]   // rest: very low quiet tone
+      };
+      this.playGentleCue(pitchMap[phaseName] || [240, 300], phaseName);
+    } else if (this.soundPack === 'bowl') {
+      const pitchMap = {
+        'inhale': 216,
+        'hold-in': 288,
+        'exhale': 192,
+        'hold-out': 162
       };
       const freq = pitchMap[phaseName] || 216;
       this.playSingingBowl(freq);
     } else if (this.soundPack === 'chime') {
       const pitchMap = {
-        'inhale': 528,   // Solfeggio 528Hz Transformation
+        'inhale': 528,
         'hold-in': 639,
-        'exhale': 432,   // 432Hz Calm
+        'exhale': 432,
         'hold-out': 396
       };
       this.playZenBell(pitchMap[phaseName] || 432);
@@ -163,36 +172,118 @@ class BreathAudioEngine {
     }
   }
 
-  // --- Tibetan Singing Bowl Synthesis ---
+  // -----------------------------------------------------------------------
+  // --- NEW: Gentle Breath Cue (Default) ---
+  // Slow 500ms sine fade-in with optional whisper-breath noise layer.
+  // Completely removes the jarring "strike" — feels like a soft inhale itself.
+  // -----------------------------------------------------------------------
+  playGentleCue(freqs = [285, 360], phaseName = 'inhale') {
+    if (!this.ctx || this.soundPack === 'silent') return;
+    const now = this.ctx.currentTime;
+
+    // Volume scale: holds are barely audible, active phases are soft but clear
+    const gainMap = {
+      'inhale':   0.18,
+      'hold-in':  0.06,
+      'exhale':   0.15,
+      'hold-out': 0.04
+    };
+    const peakGain = gainMap[phaseName] || 0.15;
+
+    // Attack ramp: slow & smooth — 500ms for active, 800ms for holds
+    const attackTime = (phaseName === 'hold-in' || phaseName === 'hold-out') ? 0.8 : 0.5;
+    const decayTime  = (phaseName === 'hold-in' || phaseName === 'hold-out') ? 3.0 : 3.5;
+
+    freqs.forEach((freq, i) => {
+      const osc     = this.ctx.createOscillator();
+      const oscGain = this.ctx.createGain();
+
+      osc.type = 'sine';
+      // Very subtle detune between the two partials for warmth (no metallic quality)
+      osc.frequency.setValueAtTime(freq + (i === 1 ? 0.5 : 0), now);
+
+      // Silky S-curve envelope: silence → slow rise → long gentle fade
+      oscGain.gain.setValueAtTime(0.0001, now);
+      oscGain.gain.linearRampToValueAtTime(peakGain * (i === 0 ? 1.0 : 0.4), now + attackTime);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, now + attackTime + decayTime);
+
+      osc.connect(oscGain);
+      oscGain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + attackTime + decayTime + 0.1);
+    });
+
+    // Add a soft breath-wind texture on inhale and exhale only
+    if (phaseName === 'inhale' || phaseName === 'exhale') {
+      this.playBreathWhisper(phaseName);
+    }
+  }
+
+  // Soft breath-wind whisper using very quiet filtered noise
+  playBreathWhisper(phaseName = 'inhale') {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+
+    // Tiny 0.8s noise buffer
+    const bufLen = Math.floor(this.ctx.sampleRate * 0.8);
+    const buf    = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
+    const data   = buf.getChannelData(0);
+    // Gentle white noise (lower amplitude than pink — airy, not hissy)
+    for (let i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+
+    const src    = this.ctx.createBufferSource();
+    src.buffer   = buf;
+
+    // Band-pass around 1–3 kHz for airy breath texture
+    const bpf = this.ctx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.setValueAtTime(phaseName === 'inhale' ? 1800 : 1200, now);
+    bpf.Q.setValueAtTime(0.8, now);
+
+    const noiseGain = this.ctx.createGain();
+    // Inhale whisper fades in; exhale fades out — mirrors breath direction
+    noiseGain.gain.setValueAtTime(0.0001, now);
+    if (phaseName === 'inhale') {
+      noiseGain.gain.linearRampToValueAtTime(0.035, now + 0.4);
+      noiseGain.gain.linearRampToValueAtTime(0.0001, now + 0.8);
+    } else {
+      noiseGain.gain.linearRampToValueAtTime(0.028, now + 0.15);
+      noiseGain.gain.linearRampToValueAtTime(0.0001, now + 0.8);
+    }
+
+    src.connect(bpf);
+    bpf.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+    src.start(now);
+    src.stop(now + 0.85);
+  }
+
+  // --- Tibetan Singing Bowl Synthesis (original, kept for 'bowl' pack) ---
   playSingingBowl(baseFreq = 216) {
     if (!this.ctx || this.soundPack === 'silent') return;
     const now = this.ctx.currentTime;
 
-    // Harmonic partials of singing bowls: fundamental + metallic non-harmonics
+    // Softer attack than original — 0.12s instead of 0.04s, lower gain
     const partials = [
-      { ratio: 1.0,  gain: 0.45, decay: 4.2 },
-      { ratio: 2.76, gain: 0.28, decay: 3.2 },
-      { ratio: 4.76, gain: 0.14, decay: 2.1 },
-      { ratio: 5.40, gain: 0.09, decay: 1.8 }
+      { ratio: 1.0,  gain: 0.28, decay: 4.2 },
+      { ratio: 2.76, gain: 0.16, decay: 3.2 },
+      { ratio: 4.76, gain: 0.08, decay: 2.1 },
+      { ratio: 5.40, gain: 0.05, decay: 1.8 }
     ];
 
     partials.forEach((p, idx) => {
-      const osc = this.ctx.createOscillator();
+      const osc     = this.ctx.createOscillator();
       const oscGain = this.ctx.createGain();
-
-      // Subtle detune for shimmer wa-wa
       const detuneSpread = (idx % 2 === 0 ? 1 : -1) * 0.8;
       osc.type = idx === 0 ? 'sine' : 'triangle';
       osc.frequency.setValueAtTime(baseFreq * p.ratio + detuneSpread, now);
 
-      // Strike envelope
       oscGain.gain.setValueAtTime(0.0001, now);
-      oscGain.gain.linearRampToValueAtTime(p.gain, now + 0.04);
+      oscGain.gain.linearRampToValueAtTime(p.gain, now + 0.12); // softer attack
       oscGain.gain.exponentialRampToValueAtTime(0.0001, now + p.decay);
 
       osc.connect(oscGain);
       oscGain.connect(this.masterGain);
-
       osc.start(now);
       osc.stop(now + p.decay + 0.1);
     });

@@ -194,6 +194,9 @@ class BreathApp {
       const savedSoundPack = localStorage.getItem('br_sound_pack');
       if (savedSoundPack && window.breathAudio) {
         window.breathAudio.setSoundPack(savedSoundPack);
+      } else {
+        // Default to gentle whisper pack for all new visitors
+        window.breathAudio.setSoundPack('gentle');
       }
 
       const savedVoice = localStorage.getItem('br_voice_enabled');
