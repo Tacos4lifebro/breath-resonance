@@ -890,7 +890,20 @@ class BreathApp {
   initServiceWorker() {
     if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(err => {
+        navigator.serviceWorker.register('./sw.js').then(reg => {
+          // Check for updates on load
+          reg.onupdatefound = () => {
+            const installingWorker = reg.installing;
+            if (installingWorker) {
+              installingWorker.onstatechange = () => {
+                if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // New content available; force reload
+                  window.location.reload();
+                }
+              };
+            }
+          };
+        }).catch(err => {
           console.log('SW registration note:', err);
         });
       });

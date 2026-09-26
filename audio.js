@@ -142,6 +142,9 @@ class BreathAudioEngine {
         'hold-out': [180, 213]   // rest: very low quiet tone
       };
       this.playGentleCue(pitchMap[phaseName] || [240, 300], phaseName);
+    } else if (this.soundPack === 'ocean' || this.soundPack === 'waves') {
+      // Ocean wave roll in on inhale, roll out on exhale
+      this.playOceanWaveCue(phaseName);
     } else if (this.soundPack === 'bowl') {
       const pitchMap = {
         'inhale': 216,
@@ -278,6 +281,88 @@ class BreathAudioEngine {
     noiseGain.connect(this.masterGain);
     src.start(now);
     src.stop(now + 0.85);
+  }
+
+  // -----------------------------------------------------------------------
+  // --- NEW: Ocean Waves Sound Engine (Wave Inhale Roll-In / Exhale Roll-Out) ---
+  // Realistic surf swell and receding water for inhale and exhale cues.
+  // -----------------------------------------------------------------------
+  playOceanWaveCue(phaseName = 'inhale') {
+    if (!this.ctx || this.soundPack === 'silent') return;
+    const now = this.ctx.currentTime;
+
+    // 4-second pink noise surf buffer
+    const bufLen = Math.floor(this.ctx.sampleRate * 4.2);
+    const buf = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < bufLen; i++) {
+      const white = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.96900 * b2 + white * 0.1538520;
+      b3 = 0.86650 * b3 + white * 0.3104856;
+      b4 = 0.55000 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.0168980;
+      data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.09;
+      b6 = white * 0.115926;
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+
+    // Dual filters: Lowpass for deep wave swell + Bandpass for foam spray
+    const lpFilter = this.ctx.createBiquadFilter();
+    lpFilter.type = 'lowpass';
+    lpFilter.Q.setValueAtTime(1.8, now);
+
+    const bpFilter = this.ctx.createBiquadFilter();
+    bpFilter.type = 'bandpass';
+    bpFilter.Q.setValueAtTime(0.7, now);
+
+    const waveGain = this.ctx.createGain();
+    waveGain.gain.setValueAtTime(0.0001, now);
+
+    if (phaseName === 'inhale') {
+      // Inhale: Ocean Wave surge rolling IN towards shore
+      lpFilter.frequency.setValueAtTime(160, now);
+      lpFilter.frequency.exponentialRampToValueAtTime(900, now + 3.2);
+
+      bpFilter.frequency.setValueAtTime(1100, now);
+      bpFilter.frequency.linearRampToValueAtTime(2400, now + 3.2);
+
+      waveGain.gain.setValueAtTime(0.0001, now);
+      waveGain.gain.linearRampToValueAtTime(0.24, now + 2.8);
+      waveGain.gain.linearRampToValueAtTime(0.0001, now + 4.0);
+    } else if (phaseName === 'exhale') {
+      // Exhale: Ocean Wave receding OUT back to sea
+      lpFilter.frequency.setValueAtTime(800, now);
+      lpFilter.frequency.exponentialRampToValueAtTime(130, now + 3.6);
+
+      bpFilter.frequency.setValueAtTime(2200, now);
+      bpFilter.frequency.linearRampToValueAtTime(700, now + 3.6);
+
+      waveGain.gain.setValueAtTime(0.22, now);
+      waveGain.gain.linearRampToValueAtTime(0.18, now + 0.6);
+      waveGain.gain.linearRampToValueAtTime(0.0001, now + 3.8);
+    } else {
+      // Hold / Rest: Soft gentle water murmur
+      lpFilter.frequency.setValueAtTime(200, now);
+      bpFilter.frequency.setValueAtTime(850, now);
+      waveGain.gain.setValueAtTime(0.0001, now);
+      waveGain.gain.linearRampToValueAtTime(0.06, now + 0.5);
+      waveGain.gain.linearRampToValueAtTime(0.0001, now + 2.2);
+    }
+
+    src.connect(lpFilter);
+    src.connect(bpFilter);
+    lpFilter.connect(waveGain);
+    bpFilter.connect(waveGain);
+    waveGain.connect(this.masterGain);
+
+    src.start(now);
+    src.stop(now + 4.1);
   }
 
   // --- Tibetan Singing Bowl Synthesis (original, kept for 'bowl' pack) ---
