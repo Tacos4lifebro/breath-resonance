@@ -372,8 +372,14 @@ class BreathApp {
 
   play() {
     this.isActive = true;
+    // Initialize the AudioContext and force-unlock it on this user gesture.
+    // This is the critical fix for iOS Safari which blocks audio until
+    // resume() is called synchronously inside a touch/click handler.
     window.breathAudio.init();
-    this.requestWakeLock();
+    window.breathAudio.unlockAudio();
+    if (window.breathAudio.ctx && window.breathAudio.ctx.state === 'suspended') {
+      window.breathAudio.ctx.resume().catch(() => {});
+    }
 
     this.dom.playIcon.style.display = 'none';
     this.dom.pauseIcon.style.display = 'block';

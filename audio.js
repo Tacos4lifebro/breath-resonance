@@ -27,8 +27,9 @@ class BreathAudioEngine {
 
   init() {
     if (this.isInitialized && this.ctx) {
+      // Always try to resume — iOS suspends the context aggressively
       if (this.ctx.state === 'suspended') {
-        this.ctx.resume();
+        this.ctx.resume().catch(() => {});
       }
       return;
     }
@@ -36,7 +37,11 @@ class BreathAudioEngine {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AudioCtx();
-      
+
+      // iOS Safari starts contexts in 'suspended' state even inside a tap handler.
+      // We must explicitly resume() immediately on creation.
+      this.ctx.resume().catch(() => {});
+
       // Master Gain
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
@@ -46,6 +51,23 @@ class BreathAudioEngine {
     } catch (e) {
       console.warn('Web Audio API not supported or blocked:', e);
     }
+  }
+
+  // iOS / Safari requires a silent buffer played on the FIRST user gesture
+  // to fully unlock the audio pipeline. Call this from any tap/click handler.
+  unlockAudio() {
+    if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    // Play a one-sample silent buffer — this satisfies iOS's gesture requirement
+    try {
+      const silentBuf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+      const silentSrc = this.ctx.createBufferSource();
+      silentSrc.buffer = silentBuf;
+      silentSrc.connect(this.ctx.destination);
+      silentSrc.start(0);
+    } catch (e) {}
   }
 
   setVolume(val) {
@@ -474,5 +496,25 @@ class BreathAudioEngine {
   }
 }
 
-// Global audio singleton
+// Global singleton
 window.breathAudio = new BreathAudioEngine();
+
+// -----------------------------------------------------------------------
+// iOS / Mobile Audio Unlock
+// Safari and Chrome on iOS require ANY user gesture before AudioContext
+// will play. We attach a one-time listener to the whole document so that
+// the very first tap — anywhere on the screen — unlocks the pipeline.
+// -----------------------------------------------------------------------
+function _iosAudioUnlock() {
+  if (window.breathAudio) {
+    window.breathAudio.init();
+    window.breathAudio.unlockAudio();
+  }
+  // Remove after first unlock — only needs to happen once
+  document.removeEventListener('touchstart', _iosAudioUnlock, true);
+  document.removeEventListener('mousedown',  _iosAudioUnlock, true);
+  document.removeEventListener('keydown',    _iosAudioUnlock, true);
+}
+document.addEventListener('touchstart', _iosAudioUnlock, true);
+document.addEventListener('mousedown',  _iosAudioUnlock, true);
+document.addEventListener('keydown',    _iosAudioUnlock, true);

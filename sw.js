@@ -1,5 +1,5 @@
 // Breath Resonance Service Worker - 100% Offline Capability
-const CACHE_NAME = 'breath-resonance-v2';
+const CACHE_NAME = 'breath-resonance-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
